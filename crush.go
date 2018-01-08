@@ -138,6 +138,11 @@ func main() {
 		go func(src string) {
 			defer wg.Done()
 
+			// This is good enough, but it's not pretty.
+			//
+			// There's a race here to which one wins once `cancel()` is called. The
+			// race is OK because `recompress` gets the the context and will not
+			// perform the "expensive" calls.
 			select {
 			case sem <- 1:
 			case <-ctx.Done():
