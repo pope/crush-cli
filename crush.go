@@ -87,6 +87,8 @@ func initCompressCommandPath() {
 		exec = "jpeg-recompress.exe"
 	case "linux":
 		exec = "jpeg-recompress-linux"
+	case "darwin":
+		exec = "jpeg-recompress-darwin"
 	default:
 		log.Fatalf("Unsupported OS: %q", runtime.GOOS)
 	}
