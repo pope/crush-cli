@@ -16,29 +16,33 @@ import (
 
 var recompressCommand = ""
 
-func recompress(ctx context.Context, src string) error {
+func recompress(ctx context.Context, src string) (err error) {
 	srcFi, err := os.Stat(src)
 	if err != nil {
-		return err
+		return
 	}
 
-	tmp, err := ioutil.TempFile("", "recompress")
+	tmp, err := ioutil.TempFile(filepath.Dir(src), "recompress")
 	if err != nil {
-		return err
+		return
 	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Close(); err != nil {
-		return err
+	defer func() {
+		// If err is not nil, then it means there was some problem processing
+		// things. So we should remove the tmp file.
+		if err != nil {
+			os.Remove(tmp.Name())
+		}
+	}()
+	if err = tmp.Close(); err != nil {
+		return
 	}
 
 	jpegCmd := exec.CommandContext(ctx, recompressCommand, "--quality", "veryhigh", src, tmp.Name())
-	if err := jpegCmd.Run(); err != nil {
-		return err
+	if err = jpegCmd.Run(); err != nil {
+		return
 	}
 
-	// No ctx here because I don't want to interrupt the copy.
-	cpCmd := exec.Command("cmd", "/C", "copy", "/y", tmp.Name(), src)
-	if err := cpCmd.Run(); err != nil {
+	if err = os.Rename(tmp.Name(), src); err != nil {
 		return err
 	}
 
@@ -75,7 +79,16 @@ func initCompressCommandPath() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	recompressCommand = filepath.Join(dir, "jpeg-recompress.exe")
+	var exec string
+	switch runtime.GOOS {
+	case "windows":
+		exec = "jpeg-recompress.exe"
+	case "linux":
+		exec = "jpeg-recompress-linux"
+	default:
+		log.Fatalf("Unsupported OS: %q", runtime.GOOS)
+	}
+	recompressCommand = filepath.Join(dir, "vendor", exec)
 }
 
 func processArgs(args []string) ([]string, error) {
