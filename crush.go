@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -22,9 +21,6 @@ func recompress(ctx context.Context, src string) error {
 	if err != nil {
 		return err
 	}
-	if !srcFi.Mode().IsRegular() {
-		return fmt.Errorf("recompress: %s non-regular file - %q", src, srcFi.Mode().String())
-	}
 
 	tmp, err := ioutil.TempFile("", "recompress")
 	if err != nil {
@@ -40,7 +36,8 @@ func recompress(ctx context.Context, src string) error {
 		return err
 	}
 
-	cpCmd := exec.CommandContext(ctx, "cmd", "/C", "copy", "/y", tmp.Name(), src)
+	// No ctx here because I don't want to interrupt the copy.
+	cpCmd := exec.Command("cmd", "/C", "copy", "/y", tmp.Name(), src)
 	if err := cpCmd.Run(); err != nil {
 		return err
 	}
@@ -52,7 +49,7 @@ func recompress(ctx context.Context, src string) error {
 
 	diff := srcFi.Size() - dstFi.Size()
 	pct := (float64(diff) / float64(srcFi.Size())) * 100.0
-	fmt.Printf("%s: savings of %s (decreased by %0.2f%%)\n", src, humanize.Bytes(uint64(diff)), pct)
+	log.Printf("%s: savings of %s (decreased by %0.2f%%)\n", src, humanize.Bytes(uint64(diff)), pct)
 	return nil
 }
 
@@ -89,7 +86,6 @@ func processArgs(args []string) ([]string, error) {
 		}
 		return findJPEGs(dir)
 	}
-	// TODO(pope): Return the actual parameters after they have been vetted.
 	return args, nil
 }
 
@@ -108,55 +104,32 @@ func main() {
 	}
 
 	numWorkers := runtime.NumCPU()
-
-	log.Fatal(jpegs)
-
-	errChan := make(chan error, numWorkers)
-	doneChan := make(chan string)
-
-	workChan := make(chan string)
-	var activeWg sync.WaitGroup
+	sem := make(chan int, numWorkers)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	for i := 0; i < numWorkers; i++ {
-		go func() {
-			for src := range workChan {
-				activeWg.Add(1)
-				err := recompress(ctx, src)
-				if err != nil {
-					errChan <- err
-				}
-				activeWg.Done()
-			}
-		}()
-	}
+	var wg sync.WaitGroup
+	wg.Add(len(jpegs))
 
-	go func() {
-	LOOP:
-		for _, src := range jpegs {
+	for _, jpeg := range jpegs {
+		go func(src string) {
+			defer wg.Done()
+
 			select {
+			case sem <- 1:
 			case <-ctx.Done():
-				break LOOP
-			case workChan <- src:
+				return
 			}
-		}
-		close(workChan)
-		activeWg.Wait()
-		doneChan <- "done"
-	}()
 
-	select {
-	case err = <-errChan:
-		cancel()
-	case <-doneChan:
-	}
-	// This is currently a race conditions. But I need to get sleep now.
-	activeWg.Wait()
+			err := recompress(ctx, src)
+			if err != nil {
+				log.Printf("E: [%s] %q", src, err)
+				cancel()
+			}
 
-	if err != nil {
-		log.Fatal(err)
+			<-sem
+		}(jpeg)
 	}
-	log.Print("All done!")
+	wg.Wait()
 }
